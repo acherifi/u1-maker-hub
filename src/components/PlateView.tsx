@@ -12,9 +12,10 @@ import { usePlate } from "@/lib/usePlate";
 import { BedViewer, type BedPart, type FacePick } from "./BedViewer";
 import { layFaceFlat, OrientControls } from "./OrientControls";
 import { JobProgress, PresetPicker, shortPreset, type Mode } from "./PrintSetup";
-import { PrintOptionsPanel } from "./PrintOptions";
+import { PrintOptionsPanel, savePrintDefaults } from "./PrintOptions";
+import { ReadToolsButton } from "./ReadToolsButton";
 import { useCreatorSupports, useSupportsOption } from "@/lib/useCreatorSupports";
-import { DownloadIcon, SendIcon } from "./Icons";
+import { DownloadIcon, LayersIcon, SendIcon } from "./Icons";
 
 type Props = {
   settings: { loggedIn: boolean; printerConfigured: boolean; tools: ToolLoad[] };
@@ -23,8 +24,12 @@ type Props = {
 };
 
 /** Several models printed together: the list, the packed layout on the U1 bed, and the print buttons. */
-export function PlateView({ settings, modes, defaults }: Props) {
+export function PlateView({ settings: initialSettings, modes, defaults: initialDefaults }: Props) {
   const { entries, ready, update, remove, clear } = usePlate();
+  /** Toolheads can be re-read from the printer here; everything below uses this copy. */
+  const [tools, setTools] = useState<ToolLoad[]>(initialSettings.tools);
+  const settings = { ...initialSettings, tools };
+  const [defaults, setDefaults] = useState<PrintOptions>(initialDefaults);
   const [meshes, setMeshes] = useState<Record<string, MeshData>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [mode, setMode] = useState(modes[0]?.key ?? "fast");
@@ -97,13 +102,13 @@ export function PlateView({ settings, modes, defaults }: Props) {
         scale: e.size / 100,
         rotation: e.rotation,
         orient: e.orient,
-        colors: filamentColors(e, meshes[meshKey(e)], settings.tools),
+        colors: filamentColors(e, meshes[meshKey(e)], tools),
       });
       bedsOf[e.id] = [...new Set([...(bedsOf[e.id] ?? []), place.bed])].sort((a, b) => a - b);
     });
     const missing = [...new Set(copies.filter((_, i) => !places[i]).map(({ e }) => e.title))];
     return { beds, bedsOf, missing, objects: copies.length };
-  }, [entries, meshes, settings.tools]);
+  }, [entries, meshes, tools]);
 
   const bedCount = layout?.beds.length ?? 0;
   const shownBed = Math.min(viewBed, Math.max(1, bedCount));
@@ -121,10 +126,16 @@ export function PlateView({ settings, modes, defaults }: Props) {
     };
   }, [entries, pickingId, update]);
 
-  const start = async (send: boolean) => {
+  // What the last slice was made from: changing the plate or a setting afterwards means the G-code no longer matches.
+  const setupKey = JSON.stringify([mode, options, entries, tools.map((t) => t.preset)]);
+  const [slicedKey, setSlicedKey] = useState<string | null>(null);
+
+  // Slicing never prints: each plate is sent with its own button once sliced.
+  const slice = async () => {
     setSubmitError(null);
     try {
-      setJob(await api<Job>("/api/plate/print", { method: "POST", body: JSON.stringify({ mode, options, send }) }));
+      setSlicedKey(setupKey);
+      setJob(await api<Job>("/api/plate/print", { method: "POST", body: JSON.stringify({ mode, options, send: false }) }));
     } catch (e) {
       setSubmitError((e as Error).message);
     }
@@ -167,6 +178,13 @@ export function PlateView({ settings, modes, defaults }: Props) {
   const busy = job?.status === "running";
   const loading = entries.some((e) => !meshes[meshKey(e)] && !errors[meshKey(e)]);
   const fits = layout !== null && layout.missing.length === 0;
+  const hasGcode = (job?.files.gcode.length ?? 0) > 0;
+  const sliced = hasGcode && !busy;
+  const sending = hasGcode && busy;
+  const stale = sliced && slicedKey !== setupKey;
+  const multi = (job?.plates?.length ?? 0) > 1;
+  const sent = job?.steps.find((s) => s.key === "upload")?.state === "done";
+  const canSend = sliced && !stale && !sent && settings.printerConfigured;
 
   return (
     <main className="container" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -231,7 +249,13 @@ export function PlateView({ settings, modes, defaults }: Props) {
           </section>
 
           <div style={{ order: 4 }}>
-            <PrintOptionsPanel value={options} defaults={supportsOption.defaults} onChange={supportsOption.onChange} creatorSupports={creatorSupports} />
+            <PrintOptionsPanel
+              value={options}
+              defaults={supportsOption.defaults}
+              onChange={supportsOption.onChange}
+              creatorSupports={creatorSupports}
+              onSaveDefaults={async (v) => setDefaults(await savePrintDefaults(v, defaults, creatorSupports))}
+            />
           </div>
         </section>
 
@@ -254,6 +278,7 @@ export function PlateView({ settings, modes, defaults }: Props) {
             <Link className="small" href="/">
               + Add another model
             </Link>
+            {settings.printerConfigured && <ReadToolsButton onTools={setTools} />}
           </section>
 
           <section className="panel" style={{ order: 3 }}>
@@ -261,23 +286,34 @@ export function PlateView({ settings, modes, defaults }: Props) {
           </section>
 
           <section className="panel" style={{ order: 5 }}>
-            <button type="button" className="btn btn-primary btn-lg" disabled={busy || !fits || !settings.printerConfigured} onClick={() => start(true)}>
-              <SendIcon size={20} /> {bedCount > 1 ? `Slice ${bedCount} plates & print plate 1` : <>Slice plate &amp; print</>}
+            <button type="button" className={`btn btn-lg${sliced && !stale ? "" : " btn-primary"}`} disabled={busy || !fits} onClick={slice}>
+              <LayersIcon size={20} /> {busy && !sending ? "Slicing…" : sliced || sending ? "Slice again" : bedCount > 1 ? `Slice ${bedCount} plates` : "Slice plate"}
             </button>
+            {/* A multi-plate job has a send button per plate below, so a plate is always sent on purpose. */}
+            {!multi && (
+              <button type="button" className={`btn btn-lg${canSend || sending ? " btn-primary" : ""}`} disabled={!canSend || busy} onClick={() => sendExisting(1)}>
+                <SendIcon size={20} /> {sending ? "Sending…" : sent ? "Sent to printer" : "Send to printer"}
+              </button>
+            )}
+            {!sliced && !busy && settings.printerConfigured && (
+              <p className="small muted" style={{ margin: 0 }}>
+                Slice first to check the time, filament and layers. Nothing is printed until you press Send.
+              </p>
+            )}
             {bedCount > 1 && <p className="small muted">The U1 prints one plate at a time. Send the next plate from here once the bed is cleared.</p>}
+            {stale && (
+              <p className="small muted" style={{ margin: 0 }}>
+                You changed the plate or its settings since slicing. Slice again to send this version.
+              </p>
+            )}
             {!settings.printerConfigured && (
               <p className="small muted">
                 To print directly, add your printer address in <Link href="/settings">Settings</Link>. You can still slice and download.
               </p>
             )}
-            <button type="button" className="btn" disabled={busy || !fits} onClick={() => start(false)}>
-              {bedCount > 1 ? `Slice ${bedCount} plates only` : "Slice only"}
-            </button>
             {submitError && <div className="notice error">{submitError}</div>}
-            {job && <JobProgress job={job} onSend={() => sendExisting(1)} printerConfigured={settings.printerConfigured} tools={settings.tools} />}
-            {job && job.plates && job.plates.length > 1 && (
-              <JobPlates job={job} busy={busy} printerConfigured={settings.printerConfigured} tools={settings.tools} onSend={sendExisting} />
-            )}
+            {job && <JobProgress job={job} printerConfigured={settings.printerConfigured} tools={tools} />}
+            {job && multi && <JobPlates job={job} busy={busy || stale} printerConfigured={settings.printerConfigured} tools={tools} onSend={sendExisting} />}
           </section>
         </aside>
       </div>

@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { createJob } from "@/lib/jobs.ts";
 import { listPlate } from "@/lib/plate.ts";
-import { DEFAULT_OPTIONS, PRINT_MODES, type PrintMode, type PrintOptions } from "@/lib/slicer.ts";
+import { PRINT_MODES, type PrintMode, type PrintOptions } from "@/lib/slicer.ts";
+import { cleanOptions, printDefaults } from "@/lib/printDefaults.ts";
 import { errorResponse, readJson } from "@/lib/http.ts";
 
 type Body = { mode?: string; options?: Partial<PrintOptions>; send?: boolean };
@@ -20,7 +21,7 @@ export async function POST(req: Request) {
       title: `Plate: ${names.join(", ")}`.slice(0, 200),
       cover: entries[0].cover,
       mode,
-      options: { ...DEFAULT_OPTIONS, ...(b.options ?? {}) },
+      options: { ...printDefaults(), ...cleanOptions(b.options) },
       plate: 1,
       items: entries.map(({ designId, instanceId, uploadId, title, plate, size, rotation, orient, copies, bed, filamentToTool }) => ({
         designId,

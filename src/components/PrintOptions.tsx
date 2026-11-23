@@ -1,6 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import type { PrintOptions as Options } from "@/lib/slicer.ts";
+import { api } from "@/lib/format";
 
 /** The most commonly changed slicer settings, each explained for someone new to 3D printing. */
 
@@ -46,35 +48,80 @@ function Seg<T extends string | number>({ label, value, options, onChange }: { l
   );
 }
 
-/** `creatorSupports`: what the MakerWorld creator used, when known; shown next to the Supports choice. */
+/**
+ * Saves `value` as the options every new print starts from, and returns what was saved. When the supports
+ * came from a creator's profile they belong to that model, so the saved default keeps `current.supports`.
+ */
+export async function savePrintDefaults(value: Options, current: Options, creatorSupports: Options["supports"] | null): Promise<Options> {
+  const keep = creatorSupports != null ? { ...value, supports: current.supports } : value;
+  await api("/api/settings", { method: "PUT", body: JSON.stringify({ printDefaults: keep }) });
+  return keep;
+}
+
+/**
+ * `creatorSupports`: what the MakerWorld creator used, when known; shown next to the Supports choice.
+ * `onSaveDefaults`: when given, a button saves the current choices as the defaults of every new print.
+ */
 export function PrintOptionsPanel({
   value,
   defaults,
   onChange,
   creatorSupports = null,
+  onSaveDefaults,
+  title = "Fine-tune this print",
+  intro = "The settings people change most often, explained in plain words. Not sure? Leave them as they are: the preset is already a good default.",
+  defaultsLabel = "Your defaults",
 }: {
   value: Options;
   defaults: Options;
   onChange: (v: Options) => void;
   creatorSupports?: Options["supports"] | null;
+  onSaveDefaults?: (v: Options) => Promise<void>;
+  title?: string;
+  intro?: string;
+  defaultsLabel?: string;
 }) {
   const set = <K extends keyof Options>(key: K, v: Options[K]) => onChange({ ...value, [key]: v });
   const changed = (Object.keys(defaults) as (keyof Options)[]).filter((k) => value[k] !== defaults[k]).length;
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const save = async () => {
+    if (!onSaveDefaults) return;
+    setSaveState("saving");
+    try {
+      await onSaveDefaults(value);
+      setSaveState("saved");
+    } catch {
+      setSaveState("error");
+    }
+  };
 
   return (
     <section className="panel" style={{ gap: 0 }} aria-labelledby="finetune">
       <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
         <div style={{ flex: "1 1 320px", display: "flex", flexDirection: "column", gap: 4 }}>
-          <h2 id="finetune">Fine-tune this print</h2>
+          <h2 id="finetune">{title}</h2>
           <p className="muted small" style={{ lineHeight: 1.5 }}>
-            The settings people change most often, explained in plain words. Not sure? Leave them as they are: the preset is already a good default.
+            {intro}
           </p>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span className="muted small">{changed === 0 ? "Preset defaults" : `${changed} setting${changed > 1 ? "s" : ""} changed`}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span className="muted small" role="status">
+            {saveState === "saved" && changed === 0
+              ? "Saved as your defaults"
+              : saveState === "error"
+                ? "Could not save"
+                : changed === 0
+                  ? defaultsLabel
+                  : `${changed} setting${changed > 1 ? "s" : ""} changed`}
+          </span>
           <button type="button" className="btn btn-sm" onClick={() => onChange(defaults)} disabled={changed === 0}>
             Reset
           </button>
+          {onSaveDefaults && (
+            <button type="button" className="btn btn-sm" onClick={save} disabled={changed === 0 || saveState === "saving"} title="New prints will start with these settings">
+              {saveState === "saving" ? "Saving…" : "Save as my defaults"}
+            </button>
+          )}
         </div>
       </div>
 

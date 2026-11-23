@@ -12,7 +12,8 @@ import { api, duration, euros, inkFor, matchColors, printPrice, slicedPrice } fr
 import { footprint, U1_BED } from "@/lib/packing";
 import { usePlate } from "@/lib/usePlate";
 import { useSupportsOption } from "@/lib/useCreatorSupports";
-import { PrintOptionsPanel } from "./PrintOptions";
+import { PrintOptionsPanel, savePrintDefaults } from "./PrintOptions";
+import { ReadToolsButton } from "./ReadToolsButton";
 import { SizePanel } from "./SizePanel";
 import { ToolpathViewer } from "./ToolpathViewer";
 import { DownloadIcon, LayersIcon, PlateIcon, SendIcon } from "./Icons";
@@ -90,9 +91,13 @@ export function shortPreset(p: string) {
 }
 
 export function PrintSetup(props: Props) {
-  const { settings, modes, defaults, sourceKey, plates, plate, onPlate, slots, filamentCount, estimate } = props;
+  const { settings, modes, sourceKey, plates, plate, onPlate, slots, filamentCount, estimate } = props;
   const [mode, setMode] = useState(modes[0]?.key ?? "fast");
+  /** The saved defaults; "Save as my defaults" updates them without reloading. */
+  const [defaults, setDefaults] = useState<PrintOptions>(props.defaults);
   const [baseOptions, setOptions] = useState<PrintOptions>(defaults);
+  /** What is loaded in each toolhead; "Read toolheads from printer" updates it here and in Settings. */
+  const [tools, setTools] = useState<ToolLoad[]>(settings.tools);
   // The U1 settings replace the creator's, so supports start from what the creator used.
   const supportsOption = useSupportsOption(baseOptions, setOptions, props.creatorSupports, defaults);
   const options = supportsOption.value;
@@ -129,14 +134,14 @@ export function PrintSetup(props: Props) {
     const colored = slots.filter((s) => s.color);
     const picks = matchColors(
       colored.map((s) => s.color!),
-      settings.tools.map((t) => t.color),
+      tools.map((t) => t.color),
     );
     return Object.fromEntries(colored.map((s, k) => [s.slot, picks[k]])) as Record<number, number>;
-  }, [slots, settings.tools]);
+  }, [slots, tools]);
   const toolFor = (slot: number) => overrides[slot] ?? autoMap[slot] ?? 0;
   const filamentToTool = Array.from({ length: Math.max(1, filamentCount) }, (_, i) => toolFor(i + 1));
   // Index 1 is filament 1: each shows the colour of the toolhead that prints it.
-  const filamentColors = Array.from({ length: filamentToTool.length + 1 }, (_, f) => settings.tools[toolFor(Math.max(1, f))]?.color ?? "#9CA3AF");
+  const filamentColors = Array.from({ length: filamentToTool.length + 1 }, (_, f) => tools[toolFor(Math.max(1, f))]?.color ?? "#9CA3AF");
   const toolsUsed = new Set(slots.map((s) => toolFor(s.slot)));
 
   // The creator's weight for each colour, priced with the toolhead it is mapped to. Without per-colour
@@ -146,7 +151,7 @@ export function PrintSetup(props: Props) {
     estimate?.grams != null
       ? printPrice(
           slotGrams > 0 ? slots.map((s) => ({ tool: toolFor(s.slot), grams: s.grams || 0 })) : [{ tool: toolFor(slots[0]?.slot ?? 1), grams: estimate.grams }],
-          settings.tools,
+          tools,
         )
       : null;
 
@@ -177,10 +182,16 @@ export function PrintSetup(props: Props) {
     filamentToTool,
   });
 
-  const start = async (send: boolean) => {
+  // What the last slice was made from: changing anything afterwards means the G-code no longer matches.
+  const setupKey = JSON.stringify([setup(plate, true), tools.map((t) => t.preset)]);
+  const [slicedKey, setSlicedKey] = useState<string | null>(null);
+
+  // Slicing never prints: the G-code is sent with its own button once it is ready, so a print is never started by accident.
+  const slice = async () => {
     setError(null);
     try {
-      setJob(await props.slice(setup(plate, true), send));
+      setSlicedKey(setupKey);
+      setJob(await props.slice(setup(plate, true), false));
     } catch (e) {
       setError((e as Error).message);
     }
@@ -188,6 +199,7 @@ export function PrintSetup(props: Props) {
 
   const sendExisting = async () => {
     if (!job) return;
+    setError(null);
     try {
       setJob(await api<Job>(`/api/jobs/${job.id}/send`, { method: "POST" }));
     } catch (e) {
@@ -209,6 +221,12 @@ export function PrintSetup(props: Props) {
 
   const busy = job?.status === "running";
   const blocked = busy || !props.canSlice || tooBig;
+  // A failed send (printer busy, offline) leaves the G-code in place, ready to send again.
+  const sliced = Boolean(job && job.status !== "running" && job.files.gcode.length > 0);
+  const sending = Boolean(busy && job && job.files.gcode.length > 0);
+  const sent = job?.steps.find((s) => s.key === "upload")?.state === "done";
+  const stale = sliced && slicedKey !== setupKey;
+  const canSend = sliced && !sent && !stale && settings.printerConfigured;
 
   return (
     <div className="two-col">
@@ -216,7 +234,13 @@ export function PrintSetup(props: Props) {
       <section className="col-main">
         {props.media}
         <div style={{ order: 5 }}>
-          <PrintOptionsPanel value={options} defaults={supportsOption.defaults} onChange={supportsOption.onChange} creatorSupports={props.creatorSupports} />
+          <PrintOptionsPanel
+            value={options}
+            defaults={supportsOption.defaults}
+            onChange={supportsOption.onChange}
+            creatorSupports={props.creatorSupports}
+            onSaveDefaults={async (v) => setDefaults(await savePrintDefaults(v, defaults, props.creatorSupports))}
+          />
         </div>
         {props.footer}
       </section>
@@ -294,8 +318,9 @@ export function PrintSetup(props: Props) {
             {slots.some((s) => s.color)
               ? "Each model color is printed by one of your four toolheads. They are matched by closest color; change any of them."
               : "An STL has one color. Pick the toolhead that prints it."}{" "}
-            Edit what is loaded in <Link href="/settings">Settings</Link>.
+            Changed a spool? Read it from the printer, or edit it in <Link href="/settings">Settings</Link>.
           </p>
+          {settings.printerConfigured && <ReadToolsButton onTools={setTools} />}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {slots.map((s) => (
               <ToolSelect
@@ -305,7 +330,7 @@ export function PrintSetup(props: Props) {
                 detail={s.grams ? `${Math.round(s.grams)} g` : undefined}
                 swatch={s.color}
                 value={toolFor(s.slot)}
-                tools={settings.tools}
+                tools={tools}
                 onChange={(t) => setOverrides({ ...overrides, [s.slot]: t })}
               />
             ))}
@@ -331,20 +356,28 @@ export function PrintSetup(props: Props) {
 
         <section className="panel" style={{ order: 7 }}>
           {props.notice}
-          <button type="button" className="btn btn-primary btn-lg" disabled={blocked || !settings.printerConfigured} onClick={() => start(true)}>
-            <SendIcon size={20} /> Slice for U1 &amp; print
+          <button type="button" className={`btn btn-lg${sliced && !stale ? "" : " btn-primary"}`} disabled={blocked} onClick={slice}>
+            <LayersIcon size={20} /> {busy && !sending ? "Slicing…" : sliced || sending ? "Slice again" : "Slice for U1"}
           </button>
+          <button type="button" className={`btn btn-lg${canSend || sending ? " btn-primary" : ""}`} disabled={!canSend || busy} onClick={sendExisting}>
+            <SendIcon size={20} /> {sending ? "Sending…" : sent ? "Sent to printer" : "Send to printer"}
+          </button>
+          {!sliced && !busy && settings.printerConfigured && (
+            <p className="small muted" style={{ margin: 0 }}>
+              Slice first to check the time, filament and layers. Nothing is printed until you press Send to printer.
+            </p>
+          )}
+          {stale && !sent && (
+            <p className="small muted" style={{ margin: 0 }}>
+              You changed the settings since slicing. Slice again to send this version.
+            </p>
+          )}
           {props.canSlice && !settings.printerConfigured && (
             <p className="small muted">
               To print directly, add your printer address in <Link href="/settings">Settings</Link>. You can still slice and download.
             </p>
           )}
-          <div style={{ display: "grid", gridTemplateColumns: props.extraActions ? "repeat(2, minmax(0, 1fr))" : "1fr", gap: 8 }}>
-            <button type="button" className="btn" disabled={blocked} onClick={() => start(false)}>
-              Slice only
-            </button>
-            {props.extraActions}
-          </div>
+          {props.extraActions}
           <div style={{ display: "grid", gridTemplateColumns: plates.length > 1 ? "repeat(2, minmax(0, 1fr))" : "1fr", gap: 8 }}>
             <button type="button" className="btn" onClick={() => addToPlate(false)} disabled={plateState === "adding"}>
               <PlateIcon size={16} /> {plateState === "added" ? "Added · add another" : plates.length > 1 ? `Add plate ${plate}` : "Add to plate"}
@@ -362,7 +395,7 @@ export function PrintSetup(props: Props) {
           )}
           {tooBig && <div className="notice error">At {size}% the model does not fit the U1. Make it smaller in Size &amp; preview.</div>}
           {error && <div className="notice error">{error}</div>}
-          {job && <JobProgress job={job} onSend={sendExisting} printerConfigured={settings.printerConfigured} tools={settings.tools} />}
+          {job && <JobProgress job={job} printerConfigured={settings.printerConfigured} tools={tools} />}
         </section>
       </aside>
     </div>

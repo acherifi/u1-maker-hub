@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createJob, listJobs } from "@/lib/jobs.ts";
-import { DEFAULT_OPTIONS, PRINT_MODES, type PrintMode, type PrintOptions } from "@/lib/slicer.ts";
+import { PRINT_MODES, type PrintMode, type PrintOptions } from "@/lib/slicer.ts";
+import { cleanOptions, printDefaults } from "@/lib/printDefaults.ts";
 import type { PlateTransform } from "@/lib/geometry.ts";
 import { errorResponse, readJson } from "@/lib/http.ts";
 import { getUpload, uploadKind } from "@/lib/uploads.ts";
@@ -59,7 +60,7 @@ export async function POST(req: Request) {
       title: String(b.title ?? upload?.name ?? "MakerWorld model").slice(0, 200),
       cover: String(b.cover ?? ""),
       mode,
-      options: { ...DEFAULT_OPTIONS, ...(b.options ?? {}) },
+      options: { ...printDefaults(), ...cleanOptions(b.options) },
       plate,
       transform: cleanTransform(b.transform),
       filamentToTool: Array.isArray(b.filamentToTool) ? b.filamentToTool.map(Number) : [],

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { ToolLoad } from "./slicer.ts";
+import type { PrintOptions, ToolLoad } from "./slicer.ts";
 
 /** Local, single-user storage. Everything lives in ./data, which is git-ignored. */
 export const DATA_DIR = process.env.DATA_DIR ?? path.join(process.cwd(), "data");
@@ -22,6 +22,8 @@ export type Settings = {
   /** Entity id (switch.u1_plug) or device id of the plug. */
   haPlug?: string;
   tools: ToolLoad[];
+  /** The print options new prints start from, where they differ from the built-in defaults. */
+  printDefaults?: Partial<PrintOptions>;
 };
 
 const DEFAULT_SETTINGS: Settings = {
@@ -61,5 +63,6 @@ export function publicSettings() {
     haPlug: s.haPlug ?? "",
     haTokenSet: Boolean(s.haToken),
     tools: s.tools,
+    printDefaults: s.printDefaults ?? {},
   };
 }

@@ -2,6 +2,8 @@ import { Suspense } from "react";
 import { connection } from "next/server";
 import { publicSettings } from "@/lib/store.ts";
 import { u1Filaments } from "@/lib/profiles.ts";
+import { DEFAULT_OPTIONS } from "@/lib/slicer.ts";
+import { printDefaults } from "@/lib/printDefaults.ts";
 import { SettingsView } from "@/components/SettingsView";
 
 export const metadata = { title: "Settings · U1 Maker Hub" };
@@ -23,5 +25,5 @@ async function SettingsContent() {
   } catch {
     filaments = [];
   }
-  return <SettingsView initial={publicSettings()} filaments={filaments} />;
+  return <SettingsView initial={publicSettings()} filaments={filaments} printDefaults={printDefaults()} builtinDefaults={DEFAULT_OPTIONS} />;
 }

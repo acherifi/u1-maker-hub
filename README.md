@@ -23,6 +23,7 @@ MakerWorld has a huge library of models, but most of them come with Bambu Lab pr
 - 📤 **Uploads:** bring your own STL or 3MF files.
 
 ### 🛠️ Prepare the print
+- 💾 **Your defaults:** save the options you always use (for example 5% infill, no brim) in Settings, or with **Save as my defaults** on any model.
 - 🎛️ **Tuned U1 presets:** Fast & clean, Standard and Fine detail. The Bambu settings in the 3MF are replaced with a complete U1 configuration; geometry, plates and colour painting are kept.
 - 🧑‍🎓 **Beginner-friendly options:** supports, brim, size and orientation, without slicer jargon.
 - 📐 **Adaptive layer heights:** computed from the slope of the mesh, like OrcaSlicer's "Adaptive" button, because OrcaSlicer's command line ignores that setting.
@@ -31,7 +32,8 @@ MakerWorld has a huge library of models, but most of them come with Bambu Lab pr
 - 👀 **Preview:** 3D bed view before slicing and toolpath view after slicing, with print time, filament use and cost.
 
 ### 🚀 Print and monitor
-- ⚡ **One-click send:** slices with OrcaSlicer, uploads to the U1 through Moonraker, maps colours to toolheads and starts the print.
+- ⚡ **Slice, then send:** slices with OrcaSlicer so you can check time, filament and layers, then **Send to printer** uploads to the U1 through Moonraker, maps colours to toolheads and starts the print. Slicing alone never starts a print.
+- 🔄 **Read toolheads from printer:** after a filament change, one button on the model or plate page reads what is loaded and saves it.
 - 📷 **My printer:** live state, camera, temperatures, the four toolheads, pause, resume, cancel, speed, fan and light.
 - 🔌 **Printer power (optional):** turn the printer's smart plug on and off through Home Assistant. Turning off is blocked while a print is running.
 - 📲 **Installable PWA:** mobile-first layout, add it to your phone's home screen.
@@ -75,14 +77,28 @@ pnpm mock-printer
 
 ## 🐳 Docker
 
-The image bundles OrcaSlicer, so Docker is all you need:
+The image bundles OrcaSlicer, so Docker is all you need. `docker-compose.yml` pulls the prebuilt image from `ghcr.io/acherifi/u1-maker-hub`:
 
 ```bash
-docker compose up -d --build      # http://<host>:3000
+docker compose up -d              # http://<host>:3000
 docker compose logs -f
 ```
 
-Settings, the Bambu token, favourites, downloads and jobs are kept in the `u1-data` volume. To pick another OrcaSlicer release, change `ORCA_VERSION` in `docker-compose.yml` and rebuild.
+To build the image from your checkout instead (for example to pick another OrcaSlicer release with `ORCA_VERSION` in `docker-compose.build.yml`):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
+
+Settings, the Bambu token, favourites, downloads and jobs are kept in the `u1-data` volume.
+
+### 🐋 Portainer
+
+1. **Stacks → Add stack**, name it `u1-maker-hub`.
+2. Choose **Web editor** and paste `docker-compose.yml` as-is. Nothing is built, the image is pulled.
+3. **Deploy the stack**, then open `http://<host>:3000`.
+
+Use a standalone Docker environment, not Swarm: Swarm ignores `init` and the build file. If you deploy from the Git repository instead of the web editor, keep the compose path as `docker-compose.yml`; building inside Portainer is not needed.
 
 ⚠️ The image is `linux/amd64` only, because OrcaSlicer publishes no ARM Linux build. It runs on ARM hosts (Apple Silicon, Raspberry Pi) through emulation, but slicing becomes several times slower; an x86_64 machine is strongly recommended.
 
@@ -93,7 +109,7 @@ Slicing is the only heavy part; the web app itself idles at about 140 MB. OrcaSl
 | | Minimum | Recommended |
 |---|---|---|
 | 🧮 CPU | 1 core | 2 to 4 cores. OrcaSlicer is multi-threaded: more cores mean faster slicing, not more capacity |
-| 🧠 RAM | 2 GB | **3 GB + 512 MB swap** (the compose default). A 5-colour model peaks at about 600 MB; a large vase-mode model peaks at 1.6 GB on Fast and 2.7 GB on Fine detail |
+| 🧠 RAM | 2 GB | **3 GB** (the compose default), plus some swap on the host. A 5-colour model peaks at about 600 MB; a large vase-mode model peaks at 1.6 GB on Fast and 2.7 GB on Fine detail |
 | 💾 Disk | 3 GB | 10 GB. The image is about 600 MB to download and 1.7 GB on disk; downloads and jobs grow over time in the `u1-data` volume, clean it up now and then |
 
 💥 If the slicer hits the memory limit, the kernel kills it and the print fails with a slicing error: raise `memory` in `docker-compose.yml` or pick a faster preset. With less than 2 GB, keep to small models on Fast.

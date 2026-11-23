@@ -4,6 +4,9 @@
 
 ARG ORCA_VERSION=2.4.2
 ARG NODE_IMAGE=node:22-bookworm-slim
+# BuildKit sets BUILDPLATFORM itself; the legacy builder (used by some Portainer and NAS setups) does not,
+# and an empty value makes "FROM --platform=" fail.
+ARG BUILDPLATFORM=linux/amd64
 
 # ---- OrcaSlicer: unpack the AppImage's squashfs without running it ----
 # The squashfs starts right after the ELF runtime, at e_shoff + e_shentsize * e_shnum.

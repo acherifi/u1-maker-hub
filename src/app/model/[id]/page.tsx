@@ -5,7 +5,8 @@ import sanitizeHtml from "sanitize-html";
 import { getDesign, MakerWorldError } from "@/lib/makerworld.ts";
 import { publicSettings } from "@/lib/store.ts";
 import { u1Filaments } from "@/lib/profiles.ts";
-import { DEFAULT_OPTIONS, PRINT_MODES } from "@/lib/slicer.ts";
+import { PRINT_MODES } from "@/lib/slicer.ts";
+import { printDefaults } from "@/lib/printDefaults.ts";
 import { ModelView } from "@/components/ModelView";
 import { mwImage } from "@/lib/format";
 
@@ -64,7 +65,7 @@ async function ModelContent({ params }: { params: PageProps<"/model/[id]">["para
         }}
         settings={{ loggedIn: settings.loggedIn, printerConfigured: Boolean(settings.printerHost), tools: settings.tools }}
         modes={Object.entries(PRINT_MODES).map(([key, m]) => ({ key, label: m.label, description: m.description }))}
-        defaults={DEFAULT_OPTIONS}
+        defaults={printDefaults()}
         filamentPresets={u1Filaments()}
       />
     </>

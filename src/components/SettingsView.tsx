@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import type { ToolLoad } from "@/lib/slicer.ts";
+import type { PrintOptions, ToolLoad } from "@/lib/slicer.ts";
 import { api, DEFAULT_PRICE_PER_KG, inkFor, mwImage } from "@/lib/format";
+import { PrintOptionsPanel } from "./PrintOptions";
 
 type PublicSettings = {
   loggedIn: boolean;
@@ -17,7 +18,17 @@ type PublicSettings = {
 
 type LoginStep = { status: "ok" } | { status: "code"; email: string } | { status: "tfa"; tfaKey: string };
 
-export function SettingsView({ initial, filaments }: { initial: PublicSettings; filaments: string[] }) {
+export function SettingsView({
+  initial,
+  filaments,
+  printDefaults,
+  builtinDefaults,
+}: {
+  initial: PublicSettings;
+  filaments: string[];
+  printDefaults: PrintOptions;
+  builtinDefaults: PrintOptions;
+}) {
   const [s, setS] = useState(initial);
   return (
     <main className="container" style={{ maxWidth: 900, display: "flex", flexDirection: "column", gap: 20 }}>
@@ -26,7 +37,48 @@ export function SettingsView({ initial, filaments }: { initial: PublicSettings; 
       <PrinterPanel s={s} onChange={setS} />
       <PowerPanel s={s} onChange={setS} />
       <ToolsPanel s={s} onChange={setS} filaments={filaments} />
+      <DefaultsPanel initial={printDefaults} builtin={builtinDefaults} />
     </main>
+  );
+}
+
+/** The print options every new print starts from. Reset returns to the built-in values. */
+function DefaultsPanel({ initial, builtin }: { initial: PrintOptions; builtin: PrintOptions }) {
+  const [saved, setSaved] = useState(initial);
+  const [value, setValue] = useState(initial);
+  const [state, setState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const dirty = (Object.keys(value) as (keyof PrintOptions)[]).some((k) => value[k] !== saved[k]);
+  const save = async () => {
+    setState("saving");
+    try {
+      await api("/api/settings", { method: "PUT", body: JSON.stringify({ printDefaults: value }) });
+      setSaved(value);
+      setState("saved");
+    } catch {
+      setState("error");
+    }
+  };
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <PrintOptionsPanel
+        value={value}
+        defaults={builtin}
+        defaultsLabel="Built-in defaults"
+        onChange={(v) => {
+          setValue(v);
+          setState("idle");
+        }}
+        title="Default print settings"
+        intro="Every new print starts with these, on model, upload and plate pages. You can still change them for one print. A model whose creator used supports still starts with supports on."
+      />
+      <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+        <button type="button" className="btn btn-primary" onClick={save} disabled={!dirty || state === "saving"}>
+          {state === "saving" ? "Saving…" : "Save defaults"}
+        </button>
+        {state === "saved" && !dirty && <span className="small" style={{ color: "var(--accent-ink)" }}>Saved</span>}
+        {state === "error" && <span className="small" style={{ color: "var(--danger)" }}>Could not save</span>}
+      </div>
+    </div>
   );
 }
 
@@ -373,24 +425,13 @@ function ToolsPanel({ s, onChange, filaments }: { s: PublicSettings; onChange: (
   const plaFirst = [...filaments].sort((a, b) => Number(/PLA/.test(b)) - Number(/PLA/.test(a)) || a.localeCompare(b));
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
 
-  // Reads type and colour of what is loaded from the printer's RFID / filament settings.
+  // Reads type and colour of what is loaded from the printer's RFID / filament settings, without saving.
   const syncFromPrinter = async () => {
     setSyncMsg(null);
     try {
-      const st = await api<{ online: boolean; error?: string; tools?: { filament: { type: string; color: string; loaded: boolean } }[] }>("/api/printer/status");
-      if (!st.online || !st.tools) throw new Error(st.error ?? "The printer is offline.");
-      const pick = (type: string, current: string) => {
-        const t = type.toUpperCase();
-        if (!t) return current;
-        if (current.toUpperCase().includes(t)) return current;
-        const exact = filaments.find((f) => f === `Snapmaker ${t} @U1`) ?? filaments.find((f) => f.startsWith("Snapmaker") && f.toUpperCase().includes(` ${t}`));
-        if (t === "PLA") return "Snapmaker PLA SnapSpeed @U1";
-        return exact ?? current;
-      };
-      setTools(tools.map((t, i) => {
-        const f = st.tools![i]?.filament;
-        return f && f.loaded ? { ...t, preset: pick(f.type, t.preset), color: f.color.toUpperCase() } : t;
-      }));
+      const r = await api<{ tools: ToolLoad[] }>("/api/printer/tools", { method: "POST", body: JSON.stringify({ save: false }) });
+      // Prices stay as typed here; only the filament and its colour come from the printer.
+      setTools(tools.map((t, i) => (r.tools[i] ? { ...t, preset: r.tools[i].preset, color: r.tools[i].color } : t)));
       setSaved(false);
       setSyncMsg("Read from the printer. Check, then save.");
     } catch (e) {

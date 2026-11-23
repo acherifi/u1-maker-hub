@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { publicSettings, writeSettings } from "@/lib/store.ts";
 import { readJson } from "@/lib/http.ts";
-import type { ToolLoad } from "@/lib/slicer.ts";
+import { DEFAULT_OPTIONS, type PrintOptions, type ToolLoad } from "@/lib/slicer.ts";
+import { cleanOptions } from "@/lib/printDefaults.ts";
 import { DEFAULT_PRICE_PER_KG } from "@/lib/format.ts";
 import { isPlugRef } from "@/lib/homeassistant.ts";
 
@@ -10,12 +11,18 @@ export async function GET() {
 }
 
 /**
- * Saves the printer address, the Home Assistant plug and what is loaded in each toolhead, with its price.
+ * Saves the printer address, the Home Assistant plug, what is loaded in each toolhead, with its price, and the default print options.
  * The Bambu token is managed by /api/auth/token. An empty Home Assistant token keeps the saved one; null removes it.
  */
 export async function PUT(req: Request) {
-  const body = await readJson<{ printerHost?: string; tools?: ToolLoad[]; haUrl?: string; haToken?: string | null; haPlug?: string }>(req);
+  const body = await readJson<{ printerHost?: string; tools?: ToolLoad[]; haUrl?: string; haToken?: string | null; haPlug?: string; printDefaults?: unknown }>(req);
   const patch: Parameters<typeof writeSettings>[0] = {};
+  // Only what differs from the built-in defaults is kept, so later changes to those still apply. null resets.
+  if (body.printDefaults === null) patch.printDefaults = {};
+  else if (body.printDefaults !== undefined) {
+    const clean = cleanOptions(body.printDefaults);
+    patch.printDefaults = Object.fromEntries(Object.entries(clean).filter(([k, v]) => DEFAULT_OPTIONS[k as keyof PrintOptions] !== v));
+  }
   if (typeof body.printerHost === "string") {
     const host = body.printerHost.trim();
     if (host && !/^(https?:\/\/)?[\w.-]+(:\d+)?\/?$/.test(host)) {
